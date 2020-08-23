@@ -19,7 +19,7 @@ type TaskOwner interface {
 	host.Host
 	CreateTask(function, input []byte, description string) *pb.Task
 	// Dispatch - dispatch a task to the network and return the task performer peer
-	Dispatch(*pb.Task) peer.ID
+	Dispatch(context.Context, *pb.Task) peer.ID
 	HandleTaskResponse(*pb.TaskResponse) error
 }
 
@@ -151,6 +151,7 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 	chosen, err := ioutil.ReadAll(s)
 	if err != nil {
 		log.Error("Failed to read ACK response from Task owner")
+		s.Reset()
 		return
 	}
 	if string(chosen) == "na" {
@@ -183,7 +184,15 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 }
 
 // TODO: implement this
-func (ts *TaskService) handleTaskResponse(s network.Stream) {}
+func (ts *TaskService) handleTaskResponse(s network.Stream) {
+	resp, err := readTaskResponse(s)
+	if err != nil {
+		s.Reset()
+		return
+	}
+
+	go ts.p.HandleTaskResponse(resp)
+}
 
 func (ts *TaskService) sendTaskResponse(ctx context.Context, peerID peer.ID, resp *pb.TaskResponse) error {
 	stream, err := ts.p.NewStream(ctx, peerID, taskResponseProtocolID)
@@ -211,6 +220,19 @@ func readTaskRequest(s network.Stream) (*pb.TaskRequest, error) {
 	}
 
 	return taskReq, nil
+}
+
+func readTaskResponse(s network.Stream) (*pb.TaskResponse, error) {
+	data, err := ioutil.ReadAll(s)
+	if err != nil {
+		return nil, err
+	}
+	taskResp := &pb.TaskResponse{}
+	if err = proto.Unmarshal(data, taskResp); err != nil {
+		return nil, err
+	}
+
+	return taskResp, nil
 }
 
 func writeTaskReqAck(s network.Stream, taskID string) error {

@@ -85,13 +85,13 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 
 	peerToChosenC := make(map[peer.ID]chan bool)
 	for _, p := range peers {
-		go func() {
-			peerToChosenC[p] = make(chan bool, 1)
-			if err := n.ts.Dispatch(ctx, p, req, peerToChosenC[p]); err != nil {
+		go func(peer peer.ID) {
+			peerToChosenC[peer] = make(chan bool, 1)
+			if err := n.ts.Dispatch(ctx, peer, req, peerToChosenC[peer]); err != nil {
 				return
 			}
-			acceptC <- p
-		}()
+			acceptC <- peer
+		}(p)
 	}
 
 	select {
@@ -106,9 +106,12 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 	}
 }
 
-// TODO: just log something here for now
 // HandleTaskResponse - Implements HandleTaskResponse of TaskOwner
-func (n *Node) HandleTaskResponse(*pb.TaskResponse) error { return nil }
+func (n *Node) HandleTaskResponse(resp *pb.TaskResponse) error {
+	// TODO: implement something else
+	log.Infof("Got response from %s - output: %s", resp.Performer.HostId, resp.Output)
+	return nil
+}
 
 func setupTaskDir(task *pb.Task) (string, error) {
 	dir, err := ioutil.TempDir("", fmt.Sprintf("%s-", task.TaskId))
