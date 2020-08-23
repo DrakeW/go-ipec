@@ -2,12 +2,14 @@ package ipec
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 
 	"github.com/DrakeW/go-ipec/pb"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
 	log "github.com/sirupsen/logrus"
 )
@@ -16,8 +18,8 @@ import (
 type TaskOwner interface {
 	host.Host
 	CreateTask(function, input []byte, description string) *pb.Task
-	CreateTaskRequest(*pb.Task) *pb.TaskRequest
-	Dispatch(*pb.TaskRequest) (*pb.TaskResponse, error)
+	// Dispatch - dispatch a task to the network and return the task performer peer
+	Dispatch(*pb.Task) peer.ID
 	HandleTaskResponse(*pb.TaskResponse) error
 }
 
@@ -38,17 +40,18 @@ var taskResponseProtocolID protocol.ID = "/ipec/task/response/0.1.0"
 
 // TaskService - handles the communication between TaskOwner and TaskPerformers
 type TaskService struct {
-	p             TaskOwnerPerformer
-	cTaskResult   map[string]chan *pb.TaskResponse
-	cNewTaskOwner chan string
+	p                  TaskOwnerPerformer
+	cTaskResult        map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
+	cNewTaskOwner      chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
+	taskToPerformerMap map[string]peer.ID                // keeps track of which performer handles which task
 }
 
 // NewTaskService - create new task service and register its stream handlers
 func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 	ts := &TaskService{
 		p:             p,
-		cTaskResult:   make(map[string]chan *pb.TaskResponse),
-		cNewTaskOwner: make(chan string),
+		cTaskResult:   make(map[peer.ID]chan *pb.TaskResponse),
+		cNewTaskOwner: make(chan peer.ID),
 	}
 	ts.p.SetStreamHandler(taskRequestProtocolID, ts.handleTaskRequest)
 	ts.p.SetStreamHandler(taskResponseProtocolID, ts.handleTaskResponse)
@@ -71,11 +74,11 @@ func (ts *TaskService) loop(ctx context.Context) {
 	}
 }
 
-func (ts *TaskService) peerLoop(ctx context.Context, peerID string) {
+func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
 	for {
 		select {
 		case resp := <-ts.cTaskResult[peerID]:
-			if err := ts.sendTaskResponse(peerID, resp); err != nil {
+			if err := ts.sendTaskResponse(ctx, peer.ID(peerID), resp); err != nil {
 				log.Errorf("Failed to send task response to peer %s - Error: %s", peerID, err.Error())
 			}
 			close(ts.cTaskResult[peerID])
@@ -87,22 +90,83 @@ func (ts *TaskService) peerLoop(ctx context.Context, peerID string) {
 	}
 }
 
+// Dispatch - dispatch a task request to peer
+func (ts *TaskService) Dispatch(ctx context.Context, peer peer.ID, req *pb.TaskRequest, chosenC chan bool) error {
+	stream, err := ts.p.NewStream(ctx, peer, taskRequestProtocolID)
+	if err != nil {
+		return err
+	}
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if _, err = stream.Write(data); err != nil {
+		return err
+	}
+	// read ACK response from peer
+	respData, err := ioutil.ReadAll(stream)
+	if err != nil {
+		return err
+	}
+
+	resp := &pb.TaskResponse{}
+	if err = proto.Unmarshal(respData, resp); err != nil {
+		return err
+	}
+
+	if resp.Status != pb.TaskResponse_ACCEPT {
+		return fmt.Errorf("Peer %s did not accept task request", peer)
+	}
+
+	defer func() {
+		select {
+		case chosen := <-chosenC:
+			if chosen {
+				stream.Write([]byte(req.Task.TaskId))
+				ts.taskToPerformerMap[req.Task.TaskId] = peer
+			}
+			close(chosenC)
+		}
+	}()
+
+	return nil
+}
+
 func (ts *TaskService) handleTaskRequest(s network.Stream) {
 	taskReq, err := readTaskRequest(s)
 	if err != nil {
 		s.Reset()
 		return
 	}
-	log.Infof("Received task request from perr %s - Task ID: %s", taskReq.Owner.HostId, taskReq.Task.TaskId)
+	log.Infof("Received task request from peer %s - Task ID: %s", taskReq.Owner.HostId, taskReq.Task.TaskId)
 
 	if err = writeTaskReqAck(s, taskReq.Task.TaskId); err != nil {
 		s.Reset()
 		return
 	}
 
-	if _, ok := ts.cTaskResult[taskReq.Owner.HostId]; !ok {
-		ts.cTaskResult[taskReq.Owner.HostId] = make(chan *pb.TaskResponse, 1)
-		ts.cNewTaskOwner <- taskReq.Owner.HostId
+	// read from stream again:
+	// - if task ID is returned then this peer is chosen to perform the task
+	// - if "na" is returned then this peer is NOT chosen
+	chosen, err := ioutil.ReadAll(s)
+	if err != nil {
+		log.Error("Failed to read ACK response from Task owner")
+		return
+	}
+	if string(chosen) == "na" {
+		log.Infof("This peer is not chosen as the task performer for task %s", taskReq.Task.TaskId)
+		return
+	} else if string(chosen) == taskReq.Task.TaskId {
+		log.Infof("This peer is chosen as the task performer for task %s", taskReq.Task.TaskId)
+	} else {
+		log.Warnf("Invalid ACK response received. Abort. - Response: %s", string(chosen))
+		return
+	}
+
+	taskOwnerID := peer.ID(taskReq.Owner.HostId)
+	if _, ok := ts.cTaskResult[taskOwnerID]; !ok {
+		ts.cTaskResult[taskOwnerID] = make(chan *pb.TaskResponse, 1)
+		ts.cNewTaskOwner <- taskOwnerID
 	}
 
 	go func() {
@@ -114,14 +178,25 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 				Output: []byte(err.Error()),
 			}
 		}
-		ts.cTaskResult[taskReq.Owner.HostId] <- resp
+		ts.cTaskResult[taskOwnerID] <- resp
 	}()
 }
 
 // TODO: implement this
 func (ts *TaskService) handleTaskResponse(s network.Stream) {}
 
-func (ts *TaskService) sendTaskResponse(peerID string, resp *pb.TaskResponse) error {
+func (ts *TaskService) sendTaskResponse(ctx context.Context, peerID peer.ID, resp *pb.TaskResponse) error {
+	stream, err := ts.p.NewStream(ctx, peerID, taskResponseProtocolID)
+	if err != nil {
+		return err
+	}
+	data, err := proto.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	if _, err = stream.Write(data); err != nil {
+		return err
+	}
 	return nil
 }
 

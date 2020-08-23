@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/DrakeW/go-ipec/pb"
+	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p-core/host"
+	"github.com/libp2p/go-libp2p-core/peer"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -59,14 +61,52 @@ func (n *Node) HandleTaskRequest(req *pb.TaskRequest) (*pb.TaskResponse, error) 
 }
 
 // CreateTask - Implements CreateTask of TaskOwner
-func (n *Node) CreateTask(function, input []byte, description string) *pb.Task { return nil }
+func (n *Node) CreateTask(function, input []byte, description string) *pb.Task {
+	return &pb.Task{
+		TaskId:      uuid.New().String(),
+		Function:    function,
+		Input:       input,
+		Description: description,
+		Owner:       &pb.TaskOwner{HostId: n.ID().Pretty()},
+		CreatedAt:   time.Now().Unix(),
+	}
+}
 
-// CreateTaskRequest - Implements CreateTaskRequest of TaskOwner
-func (n *Node) CreateTaskRequest(*pb.Task) *pb.TaskRequest { return nil }
+// Dispatch - dispatch a task to the network and return the task performer peer
+func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
+	req := &pb.TaskRequest{
+		Task:  task,
+		Owner: &pb.TaskOwner{HostId: n.ID().Pretty()},
+	}
 
-// Dispatch - Implements Dispatch of TaskOwner
-func (n *Node) Dispatch(*pb.TaskRequest) (*pb.TaskResponse, error) { return nil, nil }
+	peers := n.Peerstore().Peers()
+	acceptC := make(chan peer.ID, 1)
+	defer close(acceptC)
 
+	peerToChosenC := make(map[peer.ID]chan bool)
+	for _, p := range peers {
+		go func() {
+			peerToChosenC[p] = make(chan bool, 1)
+			if err := n.ts.Dispatch(ctx, p, req, peerToChosenC[p]); err != nil {
+				return
+			}
+			acceptC <- p
+		}()
+	}
+
+	select {
+	case selectedPeer := <-acceptC:
+		// first one responded is the chosen one to perform the task
+		for peer, c := range peerToChosenC {
+			c <- peer == selectedPeer
+		}
+		return selectedPeer
+	case <-ctx.Done():
+		return ""
+	}
+}
+
+// TODO: just log something here for now
 // HandleTaskResponse - Implements HandleTaskResponse of TaskOwner
 func (n *Node) HandleTaskResponse(*pb.TaskResponse) error { return nil }
 
