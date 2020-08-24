@@ -33,7 +33,7 @@ func NewNode(ctx context.Context, h host.Host) *Node {
 
 // HandleTaskRequest - Implements HandleTaskRequest of TaskPerformer
 func (n *Node) HandleTaskRequest(req *pb.TaskRequest) (*pb.TaskResponse, error) {
-	log.Infof("Start handling task - Task ID: %s", req.Task.TaskId)
+	log.WithField("task", req.Task.TaskId).Info("Start handling task")
 
 	taskDir, err := setupTaskDir(req.Task)
 	if err != nil {
@@ -83,7 +83,7 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 	acceptC := make(chan peer.ID, 1)
 	defer close(acceptC)
 
-	log.Infof("Trying to dispatch task %s to connected peers: %s", task.TaskId, peers)
+	log.WithField("task", task.TaskId).Infof("Dispatching tasks to connected peers %s", peers)
 
 	peerToChosenC := make(map[peer.ID]chan bool)
 	for _, p := range peers {
@@ -111,7 +111,9 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 // HandleTaskResponse - Implements HandleTaskResponse of TaskOwner
 func (n *Node) HandleTaskResponse(resp *pb.TaskResponse) error {
 	// TODO: implement something else
-	log.Infof("Got response from %s - output: %s", resp.Performer.HostId, resp.Output)
+	log.WithFields(log.Fields{
+		"from": resp.Performer.HostId,
+	}).Infof("Received response - output: %s", resp.Output)
 	return nil
 }
 

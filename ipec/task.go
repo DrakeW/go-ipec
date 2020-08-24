@@ -84,7 +84,7 @@ func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
 		select {
 		case resp := <-ts.cTaskResult[peerID]:
 			if err := ts.sendTaskResponse(ctx, peer.ID(peerID), resp); err != nil {
-				log.Errorf("Failed to send task response to peer %s - Error: %s", peerID, err.Error())
+				log.WithField("to", peerID).Errorf("Failed to send task response - Error: %s", err.Error())
 			}
 			close(ts.cTaskResult[peerID])
 
@@ -141,7 +141,10 @@ func (ts *TaskService) Dispatch(ctx context.Context, peer peer.ID, req *pb.TaskR
 func (ts *TaskService) sendAccpetAckMessage(
 	ctx context.Context, peer peer.ID, taskID string, chosen bool,
 ) error {
-	log.Infof("Sending task accept ACK to peer %s for task %s", peer, taskID)
+	log.WithFields(log.Fields{
+		"to":   peer,
+		"task": taskID,
+	}).Infof("Sending task accept ACK")
 	s, err := ts.p.NewStream(ctx, peer, taskAcceptProtocolID)
 	if err != nil {
 		return err
@@ -171,13 +174,19 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 		s.Reset()
 		return
 	}
-	log.Infof("Received task request from peer %s - Task ID: %s", taskReq.Owner.HostId, taskReq.Task.TaskId)
+	log.WithFields(log.Fields{
+		"from": taskReq.Owner.HostId,
+		"task": taskReq.Task.TaskId,
+	}).Infof("Received task request")
 
 	if err = writeTaskReqAccept(s, taskReq.Task.TaskId); err != nil {
 		s.Reset()
 		return
 	}
-	log.Infof("Accepted task %s from peer %s. Pending ACK", taskReq.Task.TaskId, taskReq.Owner.HostId)
+	log.WithFields(log.Fields{
+		"from": taskReq.Owner.HostId,
+		"task": taskReq.Task.TaskId,
+	}).Infof("Accepted task. Pending ACK")
 
 	ts.pendingAckTasks[taskReq.Task.TaskId] = taskReq
 	s.Close()
@@ -203,12 +212,12 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 	taskID := ackResp.TaskId
 
 	if chosen == false {
-		log.Infof("Received ACK. This peer is not chosen as the task performer for task %s", taskID)
+		log.WithField("task", taskID).Info("Received ACK. This peer is not chosen as the task performer")
 		delete(ts.pendingAckTasks, taskID)
 		return
 	}
 
-	log.Infof("Received ACK. This peer is chosen as the task performer for task %s", taskID)
+	log.WithField("task", taskID).Infof("Received ACK. This peer is chosen as the task performer")
 
 	taskReq := ts.pendingAckTasks[taskID]
 	taskOwnerID := peer.ID(taskReq.Owner.HostId)
