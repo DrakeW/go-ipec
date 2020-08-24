@@ -142,8 +142,9 @@ func (ts *TaskService) sendAccpetAckMessage(
 	ctx context.Context, peer peer.ID, taskID string, chosen bool,
 ) error {
 	log.WithFields(log.Fields{
-		"to":   peer,
-		"task": taskID,
+		"to":     peer,
+		"task":   taskID,
+		"chosen": chosen,
 	}).Infof("Sending task accept ACK")
 	s, err := ts.p.NewStream(ctx, peer, taskAcceptProtocolID)
 	if err != nil {

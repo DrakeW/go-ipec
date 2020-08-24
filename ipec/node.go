@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/DrakeW/go-ipec/pb"
@@ -86,13 +87,17 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 	log.WithField("task", task.TaskId).Infof("Dispatching tasks to connected peers %s", peers)
 
 	peerToChosenC := make(map[peer.ID]chan bool)
+	var once sync.Once
 	for _, p := range peers {
 		go func(peer peer.ID) {
 			peerToChosenC[peer] = make(chan bool, 1)
 			if err := n.ts.Dispatch(ctx, peer, req, peerToChosenC[peer]); err != nil {
 				return
 			}
-			acceptC <- peer
+
+			once.Do(func() {
+				acceptC <- peer
+			})
 		}(p)
 	}
 
