@@ -37,6 +37,7 @@ type TaskOwnerPerformer interface {
 
 var taskRequestProtocolID protocol.ID = "/ipec/task/request/0.1.0"
 var taskResponseProtocolID protocol.ID = "/ipec/task/response/0.1.0"
+var taskAcceptProtocolID protocol.ID = "/ipec/task/accept/0.1.0"
 
 // TaskService - handles the communication between TaskOwner and TaskPerformers
 type TaskService struct {
@@ -44,17 +45,21 @@ type TaskService struct {
 	cTaskResult        map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
 	cNewTaskOwner      chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
 	taskToPerformerMap map[string]peer.ID                // keeps track of which performer handles which task
+	pendingAckTasks    map[string]*pb.TaskRequest
 }
 
 // NewTaskService - create new task service and register its stream handlers
 func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 	ts := &TaskService{
-		p:             p,
-		cTaskResult:   make(map[peer.ID]chan *pb.TaskResponse),
-		cNewTaskOwner: make(chan peer.ID),
+		p:                  p,
+		cTaskResult:        make(map[peer.ID]chan *pb.TaskResponse),
+		cNewTaskOwner:      make(chan peer.ID),
+		pendingAckTasks:    make(map[string]*pb.TaskRequest),
+		taskToPerformerMap: make(map[string]peer.ID),
 	}
 	ts.p.SetStreamHandler(taskRequestProtocolID, ts.handleTaskRequest)
 	ts.p.SetStreamHandler(taskResponseProtocolID, ts.handleTaskResponse)
+	ts.p.SetStreamHandler(taskAcceptProtocolID, ts.handleTaskAcceptACK)
 
 	go ts.loop(ctx)
 
@@ -103,7 +108,9 @@ func (ts *TaskService) Dispatch(ctx context.Context, peer peer.ID, req *pb.TaskR
 	if _, err = stream.Write(data); err != nil {
 		return err
 	}
-	// read ACK response from peer
+	stream.Close()
+
+	// read Accept response from peer
 	respData, err := ioutil.ReadAll(stream)
 	if err != nil {
 		return err
@@ -118,17 +125,43 @@ func (ts *TaskService) Dispatch(ctx context.Context, peer peer.ID, req *pb.TaskR
 		return fmt.Errorf("Peer %s did not accept task request", peer)
 	}
 
-	defer func() {
+	go func() {
 		select {
 		case chosen := <-chosenC:
-			if chosen {
-				stream.Write([]byte(req.Task.TaskId))
-				ts.taskToPerformerMap[req.Task.TaskId] = peer
-			}
+			ts.sendAccpetAckMessage(ctx, peer, req.Task.TaskId, chosen)
 			close(chosenC)
 		}
 	}()
 
+	return nil
+}
+
+// sendAccpetAckMessage - writes a ACK message to the performer peer who accepted
+// the task and was chosen to perform the task with taskID by the task owner
+func (ts *TaskService) sendAccpetAckMessage(
+	ctx context.Context, peer peer.ID, taskID string, chosen bool,
+) error {
+	log.Infof("Sending task accept ACK to peer %s for task %s", peer, taskID)
+	s, err := ts.p.NewStream(ctx, peer, taskAcceptProtocolID)
+	if err != nil {
+		return err
+	}
+	acceptAck := &pb.TaskAcceptAck{
+		TaskId: taskID,
+		Chosen: chosen,
+	}
+
+	data, err := proto.Marshal(acceptAck)
+	if err != nil {
+		return err
+	}
+
+	s.Write(data)
+	s.Close()
+
+	if chosen {
+		ts.taskToPerformerMap[taskID] = peer
+	}
 	return nil
 }
 
@@ -140,30 +173,44 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 	}
 	log.Infof("Received task request from peer %s - Task ID: %s", taskReq.Owner.HostId, taskReq.Task.TaskId)
 
-	if err = writeTaskReqAck(s, taskReq.Task.TaskId); err != nil {
+	if err = writeTaskReqAccept(s, taskReq.Task.TaskId); err != nil {
 		s.Reset()
 		return
 	}
+	log.Infof("Accepted task %s from peer %s. Pending ACK", taskReq.Task.TaskId, taskReq.Owner.HostId)
 
-	// read from stream again:
+	ts.pendingAckTasks[taskReq.Task.TaskId] = taskReq
+	s.Close()
+}
+
+func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 	// - if task ID is returned then this peer is chosen to perform the task
 	// - if "na" is returned then this peer is NOT chosen
-	chosen, err := ioutil.ReadAll(s)
+	data, err := ioutil.ReadAll(s)
 	if err != nil {
 		log.Error("Failed to read ACK response from Task owner")
 		s.Reset()
 		return
 	}
-	if string(chosen) == "na" {
-		log.Infof("This peer is not chosen as the task performer for task %s", taskReq.Task.TaskId)
-		return
-	} else if string(chosen) == taskReq.Task.TaskId {
-		log.Infof("This peer is chosen as the task performer for task %s", taskReq.Task.TaskId)
-	} else {
-		log.Warnf("Invalid ACK response received. Abort. - Response: %s", string(chosen))
+
+	ackResp := &pb.TaskAcceptAck{}
+	if err = proto.Unmarshal(data, ackResp); err != nil {
+		log.Error("Failed to parse ACK response")
+		s.Reset()
+	}
+
+	chosen := ackResp.Chosen
+	taskID := ackResp.TaskId
+
+	if chosen == false {
+		log.Infof("Received ACK. This peer is not chosen as the task performer for task %s", taskID)
+		delete(ts.pendingAckTasks, taskID)
 		return
 	}
 
+	log.Infof("Received ACK. This peer is chosen as the task performer for task %s", taskID)
+
+	taskReq := ts.pendingAckTasks[taskID]
 	taskOwnerID := peer.ID(taskReq.Owner.HostId)
 	if _, ok := ts.cTaskResult[taskOwnerID]; !ok {
 		ts.cTaskResult[taskOwnerID] = make(chan *pb.TaskResponse, 1)
@@ -183,7 +230,7 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 	}()
 }
 
-// TODO: implement this
+// TODO: implement this more properly
 func (ts *TaskService) handleTaskResponse(s network.Stream) {
 	resp, err := readTaskResponse(s)
 	if err != nil {
@@ -192,6 +239,7 @@ func (ts *TaskService) handleTaskResponse(s network.Stream) {
 	}
 
 	go ts.p.HandleTaskResponse(resp)
+	s.Close()
 }
 
 func (ts *TaskService) sendTaskResponse(ctx context.Context, peerID peer.ID, resp *pb.TaskResponse) error {
@@ -206,6 +254,7 @@ func (ts *TaskService) sendTaskResponse(ctx context.Context, peerID peer.ID, res
 	if _, err = stream.Write(data); err != nil {
 		return err
 	}
+	stream.Close()
 	return nil
 }
 
@@ -235,7 +284,7 @@ func readTaskResponse(s network.Stream) (*pb.TaskResponse, error) {
 	return taskResp, nil
 }
 
-func writeTaskReqAck(s network.Stream, taskID string) error {
+func writeTaskReqAccept(s network.Stream, taskID string) error {
 	taskAck := &pb.TaskResponse{
 		TaskId: taskID,
 		Status: pb.TaskResponse_ACCEPT,

@@ -26,6 +26,11 @@ message TaskRequest {
   TaskOwner owner = 2;
 }
 
+message TaskAcceptAck {
+  string taskId = 1;
+  bool chosen = 2;
+}
+
 message TaskResponse {
   enum Status {
     ACCEPT = 0;

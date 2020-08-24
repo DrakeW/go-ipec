@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+go-ipec
 
 # Test binary, built with `go test -c`
 *.test

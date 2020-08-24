@@ -83,6 +83,8 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 	acceptC := make(chan peer.ID, 1)
 	defer close(acceptC)
 
+	log.Infof("Trying to dispatch task %s to connected peers: %s", task.TaskId, peers)
+
 	peerToChosenC := make(map[peer.ID]chan bool)
 	for _, p := range peers {
 		go func(peer peer.ID) {
