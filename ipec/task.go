@@ -87,7 +87,7 @@ func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
 				log.WithField("to", peerID).Errorf("Failed to send task response - Error: %s", err.Error())
 			}
 			close(ts.cTaskResult[peerID])
-
+			return
 		case <-ctx.Done():
 			log.Infof("Exiting background loop for peer %s", peerID)
 			break
