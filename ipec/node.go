@@ -1,7 +1,6 @@
 package ipec
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -139,21 +138,19 @@ func setupTaskDir(task *pb.Task) (string, error) {
 }
 
 func executeTask(taskDir string) error {
-	inputFile, err := os.Open(filepath.Join(taskDir, "func"))
+	inputFile, err := os.Open(filepath.Join(taskDir, "input"))
 	if err != nil {
 		return err
 	}
-	inputRdr := bufio.NewReader(inputFile)
 
-	outputFile, err := os.Open(filepath.Join(taskDir, "output"))
+	outputFile, err := os.OpenFile(filepath.Join(taskDir, "output"), os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
-	outputWtr := bufio.NewWriter(outputFile)
 
 	cmd := exec.Command(filepath.Join(taskDir, "func"))
-	cmd.Stdin = inputRdr
-	cmd.Stdout = outputWtr
+	cmd.Stdin = inputFile
+	cmd.Stdout = outputFile
 
 	if err = cmd.Run(); err != nil {
 		return err

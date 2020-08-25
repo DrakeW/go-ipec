@@ -1,2 +1,5 @@
-echo "Input is $1"
-echo "Output is $1 + 1"
+#!/bin/bash
+STDIN=$(cat -)
+
+echo "Input is $STDIN"
+echo "Output is $STDIN + 1"
