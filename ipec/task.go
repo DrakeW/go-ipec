@@ -268,6 +268,8 @@ func (ts *TaskService) sendTaskResponse(ctx context.Context, peerID peer.ID, res
 		return err
 	}
 	stream.Close()
+
+	log.WithField("to", peerID).Infof("Sent task response")
 	return nil
 }
 
