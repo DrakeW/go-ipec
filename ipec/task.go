@@ -42,8 +42,8 @@ var taskAcceptProtocolID protocol.ID = "/ipec/task/accept/0.1.0"
 // TaskService - handles the communication between TaskOwner and TaskPerformers
 type TaskService struct {
 	p                  TaskOwnerPerformer
-	cTaskResult        map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
-	cNewTaskOwner      chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
+	peerToTaskResultC  map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
+	newTaskownerC      chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
 	taskToPerformerMap map[string]peer.ID                // keeps track of which performer handles which task
 	pendingAckTasks    map[string]*pb.TaskRequest
 }
@@ -52,8 +52,8 @@ type TaskService struct {
 func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 	ts := &TaskService{
 		p:                  p,
-		cTaskResult:        make(map[peer.ID]chan *pb.TaskResponse),
-		cNewTaskOwner:      make(chan peer.ID),
+		peerToTaskResultC:  make(map[peer.ID]chan *pb.TaskResponse),
+		newTaskownerC:      make(chan peer.ID),
 		pendingAckTasks:    make(map[string]*pb.TaskRequest),
 		taskToPerformerMap: make(map[string]peer.ID),
 	}
@@ -69,7 +69,7 @@ func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 func (ts *TaskService) loop(ctx context.Context) {
 	for {
 		select {
-		case newPeer := <-ts.cNewTaskOwner:
+		case newPeer := <-ts.newTaskownerC:
 			go ts.peerLoop(ctx, newPeer)
 
 		case <-ctx.Done():
@@ -82,11 +82,11 @@ func (ts *TaskService) loop(ctx context.Context) {
 func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
 	for {
 		select {
-		case resp := <-ts.cTaskResult[peerID]:
+		case resp := <-ts.peerToTaskResultC[peerID]:
 			if err := ts.sendTaskResponse(ctx, peerID, resp); err != nil {
 				log.WithField("to", peerID).Errorf("Failed to send task response - Error: %s", err.Error())
 			}
-			close(ts.cTaskResult[peerID])
+			close(ts.peerToTaskResultC[peerID])
 			return
 		case <-ctx.Done():
 			log.Infof("Exiting background loop for peer %s", peerID)
@@ -225,9 +225,9 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 	if err != nil {
 		log.WithField("ownerId", taskReq.Task.OwnerId).Errorf("Failed to decode task owner id")
 	}
-	if _, ok := ts.cTaskResult[taskOwnerID]; !ok {
-		ts.cTaskResult[taskOwnerID] = make(chan *pb.TaskResponse, 1)
-		ts.cNewTaskOwner <- taskOwnerID
+	if _, ok := ts.peerToTaskResultC[taskOwnerID]; !ok {
+		ts.peerToTaskResultC[taskOwnerID] = make(chan *pb.TaskResponse, 1)
+		ts.newTaskownerC <- taskOwnerID
 	}
 
 	go func() {
@@ -240,7 +240,7 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 				PerformerId: ts.p.ID().Pretty(),
 			}
 		}
-		ts.cTaskResult[taskOwnerID] <- resp
+		ts.peerToTaskResultC[taskOwnerID] <- resp
 	}()
 }
 
