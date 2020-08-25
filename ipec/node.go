@@ -125,13 +125,13 @@ func setupTaskDir(task *pb.Task) (string, error) {
 		return "", err
 	}
 
-	if err = ioutil.WriteFile(filepath.Join(dir, "func"), task.Function, os.FileMode(os.O_RDONLY|os.O_EXCL)); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(dir, "func"), task.Function, os.FileMode(0544)); err != nil {
 		return dir, err
 	}
-	if err = ioutil.WriteFile(filepath.Join(dir, "input"), task.Input, os.FileMode(os.O_RDONLY)); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(dir, "input"), task.Input, os.FileMode(0444)); err != nil {
 		return dir, err
 	}
-	if err = ioutil.WriteFile(filepath.Join(dir, "output"), []byte{}, os.FileMode(os.O_WRONLY)); err != nil {
+	if err = ioutil.WriteFile(filepath.Join(dir, "output"), []byte{}, os.FileMode(0644)); err != nil {
 		return dir, err
 	}
 
