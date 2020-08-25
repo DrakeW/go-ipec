@@ -114,9 +114,8 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 // HandleTaskResponse - Implements HandleTaskResponse of TaskOwner
 func (n *Node) HandleTaskResponse(resp *pb.TaskResponse) error {
 	// TODO: implement something else
-	log.WithFields(log.Fields{
-		"from": resp.PerformerId,
-	}).Infof("Received response - output: %s", resp.Output)
+	log.WithField("from", resp.PerformerId).Info("Received response")
+	log.WithField("from", resp.PerformerId).Infof("Response: %s", resp)
 	return nil
 }
 

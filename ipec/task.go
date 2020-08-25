@@ -234,9 +234,10 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 		resp, err := ts.p.HandleTaskRequest(taskReq)
 		if err != nil {
 			resp = &pb.TaskResponse{
-				Status: pb.TaskResponse_FAILED,
-				TaskId: taskReq.Task.TaskId,
-				Output: []byte(err.Error()),
+				Status:      pb.TaskResponse_FAILED,
+				TaskId:      taskReq.Task.TaskId,
+				Output:      []byte(err.Error()),
+				PerformerId: ts.p.ID().Pretty(),
 			}
 		}
 		ts.cTaskResult[taskOwnerID] <- resp
