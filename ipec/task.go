@@ -83,7 +83,7 @@ func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
 	for {
 		select {
 		case resp := <-ts.cTaskResult[peerID]:
-			if err := ts.sendTaskResponse(ctx, peer.ID(peerID), resp); err != nil {
+			if err := ts.sendTaskResponse(ctx, peerID, resp); err != nil {
 				log.WithField("to", peerID).Errorf("Failed to send task response - Error: %s", err.Error())
 			}
 			close(ts.cTaskResult[peerID])
@@ -176,7 +176,7 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 		return
 	}
 	log.WithFields(log.Fields{
-		"from": taskReq.Owner.HostId,
+		"from": taskReq.Task.OwnerId,
 		"task": taskReq.Task.TaskId,
 	}).Infof("Received task request")
 
@@ -185,7 +185,7 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 		return
 	}
 	log.WithFields(log.Fields{
-		"from": taskReq.Owner.HostId,
+		"from": taskReq.Task.OwnerId,
 		"task": taskReq.Task.TaskId,
 	}).Infof("Accepted task. Pending ACK")
 
@@ -221,7 +221,10 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 	log.WithField("task", taskID).Infof("Received ACK. This peer is chosen as the task performer")
 
 	taskReq := ts.pendingAckTasks[taskID]
-	taskOwnerID := peer.ID(taskReq.Owner.HostId)
+	taskOwnerID, err := peer.Decode(taskReq.Task.OwnerId)
+	if err != nil {
+		log.WithField("ownerId", taskReq.Task.OwnerId).Errorf("Failed to decode task owner id")
+	}
 	if _, ok := ts.cTaskResult[taskOwnerID]; !ok {
 		ts.cTaskResult[taskOwnerID] = make(chan *pb.TaskResponse, 1)
 		ts.cNewTaskOwner <- taskOwnerID

@@ -51,13 +51,11 @@ func (n *Node) HandleTaskRequest(req *pb.TaskRequest) (*pb.TaskResponse, error) 
 	}
 
 	return &pb.TaskResponse{
-		Status:     pb.TaskResponse_DONE,
-		TaskId:     req.Task.TaskId,
-		Output:     output,
-		FinishedAt: time.Now().Unix(),
-		Performer: &pb.TaskPerformer{
-			HostId: n.ID().Pretty(),
-		},
+		Status:      pb.TaskResponse_DONE,
+		TaskId:      req.Task.TaskId,
+		Output:      output,
+		FinishedAt:  time.Now().Unix(),
+		PerformerId: n.ID().Pretty(),
 	}, nil
 }
 
@@ -68,7 +66,7 @@ func (n *Node) CreateTask(function, input []byte, description string) *pb.Task {
 		Function:    function,
 		Input:       input,
 		Description: description,
-		Owner:       &pb.TaskOwner{HostId: n.ID().Pretty()},
+		OwnerId:     n.ID().Pretty(),
 		CreatedAt:   time.Now().Unix(),
 	}
 }
@@ -76,8 +74,8 @@ func (n *Node) CreateTask(function, input []byte, description string) *pb.Task {
 // Dispatch - dispatch a task to the network and return the task performer peer
 func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 	req := &pb.TaskRequest{
-		Task:  task,
-		Owner: &pb.TaskOwner{HostId: n.ID().Pretty()},
+		Task:     task,
+		SenderId: n.ID().Pretty(),
 	}
 
 	peers := n.Peerstore().Peers()
@@ -117,7 +115,7 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 func (n *Node) HandleTaskResponse(resp *pb.TaskResponse) error {
 	// TODO: implement something else
 	log.WithFields(log.Fields{
-		"from": resp.Performer.HostId,
+		"from": resp.PerformerId,
 	}).Infof("Received response - output: %s", resp.Output)
 	return nil
 }

@@ -4,26 +4,18 @@ option go_package = ".;pb";
 
 package protocols.ipec;
 
-message TaskOwner {
-  string hostId = 1;
-}
-
-message TaskPerformer {
-  string hostId = 1;
-}
-
 message Task {
   string taskId = 1;
   bytes function = 2;
   bytes input = 3;
   string description = 4;
-  TaskOwner owner = 5;
+  string ownerId = 5;
   int64 createdAt = 15;
 }
 
 message TaskRequest {
   Task task = 1;
-  TaskOwner owner = 2;
+  string senderId = 2;
 }
 
 message TaskAcceptAck {
@@ -44,5 +36,5 @@ message TaskResponse {
   bytes output = 3;
   int64 finishedAt = 4;
   int64 schedule = 5;
-  TaskPerformer performer = 6;
+  string performerId = 6;
 }
