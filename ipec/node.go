@@ -23,8 +23,8 @@ type Node struct {
 	ts *TaskService
 }
 
-// NewNode - create a new ndoe
-func NewNode(ctx context.Context, h host.Host) *Node {
+// NewNodeWithHost - create a new node with a libp2p host
+func NewNodeWithHost(ctx context.Context, h host.Host) *Node {
 	n := &Node{Host: h}
 	ts := NewTaskService(ctx, n)
 	n.ts = ts
@@ -77,15 +77,22 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 		SenderId: n.ID().Pretty(),
 	}
 
+	// TODO: (junyu) need a module to determine which peer to connect to based on heuritsitcs like
+	// RTT, computing power (cpu cores, mem, etc), availability
 	peers := n.Peerstore().Peers()
+
 	acceptC := make(chan peer.ID, 1)
 	defer close(acceptC)
 
-	log.WithField("task", task.TaskId).Infof("Dispatching tasks to connected peers %s", peers)
+	log.WithField("task", task.TaskId).Infof("Dispatching tasks to connected peers %s except self", peers)
 
 	peerToChosenC := make(map[peer.ID]chan bool)
 	var once sync.Once
 	for _, p := range peers {
+		if p == n.ID() {
+			continue
+		}
+
 		go func(peer peer.ID) {
 			peerToChosenC[peer] = make(chan bool, 1)
 			if err := n.ts.Dispatch(ctx, peer, req, peerToChosenC[peer]); err != nil {
@@ -106,6 +113,7 @@ func (n *Node) Dispatch(ctx context.Context, task *pb.Task) peer.ID {
 		}
 		return selectedPeer
 	case <-ctx.Done():
+		log.Warnf("No peer was selected to execute task %s. Dispatch failed.")
 		return ""
 	}
 }

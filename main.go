@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/DrakeW/go-ipec/ipec"
@@ -25,7 +27,7 @@ func main() {
 
 	priv, _, _ := crypto.GenerateKeyPair(crypto.Secp256k1, 256)
 	listen, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", *port))
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 	host, _ := libp2p.New(
 		ctx,
 		libp2p.ListenAddrs(listen),
@@ -46,7 +48,7 @@ func main() {
 		}
 	}
 
-	node := ipec.NewNode(ctx, host)
+	node := ipec.NewNodeWithHost(ctx, host)
 
 	// task owner
 	if *funcFile != "" && *inputFile != "" {
@@ -56,6 +58,12 @@ func main() {
 		node.Dispatch(ctx, task)
 	}
 
-	// hang forever
-	select {}
+	sigChan := make(chan os.Signal)
+	signal.Notify(sigChan, os.Kill, os.Interrupt)
+
+	select {
+	case <-sigChan:
+		log.Info("Stopping IPEC process...")
+		cancel()
+	}
 }
