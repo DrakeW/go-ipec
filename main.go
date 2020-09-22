@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"strings"
@@ -52,9 +51,10 @@ func main() {
 
 	// task owner
 	if *funcFile != "" && *inputFile != "" {
-		funcData, _ := ioutil.ReadFile(*funcFile)
-		inputData, _ := ioutil.ReadFile(*inputFile)
-		task := node.CreateTask(funcData, inputData, "test task")
+		task, err := node.CreateTask(ctx, *funcFile, *inputFile, "test task")
+		if err != nil {
+			panic(err)
+		}
 		node.Dispatch(ctx, task)
 	}
 

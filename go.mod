@@ -5,10 +5,15 @@ go 1.14
 require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.1
+	github.com/ipfs/go-cid v0.0.7
+	github.com/ipfs/go-ipfs v0.6.0
+	github.com/ipfs/go-ipfs-files v0.0.8
+	github.com/ipfs/interface-go-ipfs-core v0.3.0
 	github.com/libp2p/go-libp2p v0.10.3
 	github.com/libp2p/go-libp2p-core v0.6.1
 	github.com/libp2p/go-libp2p-crypto v0.1.0
 	github.com/multiformats/go-multiaddr v0.2.2
+	github.com/multiformats/go-multihash v0.0.14
 	github.com/sirupsen/logrus v1.6.0
 	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
 	golang.org/x/net v0.0.0-20200707034311-ab3426394381 // indirect

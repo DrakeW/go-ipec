@@ -17,7 +17,7 @@ import (
 // TaskOwner - A libp2p host that can create and dispatch task to TaskPerformer
 type TaskOwner interface {
 	host.Host
-	CreateTask(function, input []byte, description string) *pb.Task
+	CreateTask(ctx context.Context, funcPath, inputPath, description string) (*pb.Task, error)
 	// Dispatch - dispatch a task to the network and return the task performer peer
 	Dispatch(context.Context, *pb.Task) peer.ID
 	HandleTaskResponse(*pb.TaskResponse) error
@@ -26,7 +26,7 @@ type TaskOwner interface {
 // TaskPerformer - A libp2p host that performs task
 type TaskPerformer interface {
 	host.Host
-	HandleTaskRequest(*pb.TaskRequest) (*pb.TaskResponse, error)
+	HandleTaskRequest(context.Context, *pb.TaskRequest) (*pb.TaskResponse, error)
 }
 
 // TaskOwnerPerformer - a libp2p host that can both create and perform tasks
@@ -41,21 +41,23 @@ var taskAcceptProtocolID protocol.ID = "/ipec/task/accept/0.1.0"
 
 // TaskService - handles the communication between TaskOwner and TaskPerformers
 type TaskService struct {
-	p                  TaskOwnerPerformer
-	peerToTaskResultC  map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
-	newTaskownerC      chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
-	taskToPerformerMap map[string]peer.ID                // keeps track of which performer handles which task
-	pendingAckTasks    map[string]*pb.TaskRequest
+	p                        TaskOwnerPerformer
+	ownerToTaskResponseChan  map[peer.ID]chan *pb.TaskResponse // a map of task owner to a channel of task result which will be notified when task result is ready
+	cNewTaskOwner            chan peer.ID                      // channel to notify this peer starts handling a new task from a specific task owner
+	ownerToTaskRequestMap    map[peer.ID]*pb.TaskRequest       // keeps track of tasks being handled by this node and their owners
+	taskToPerformerMap       map[string]peer.ID                // keeps track of which performer handles which task
+	pendingAckTaskIDToReqMap map[string]*pb.TaskRequest        // keeps track of tasks accepted by the task performer node (this node) but pending ACK from task owner
 }
 
 // NewTaskService - create new task service and register its stream handlers
 func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 	ts := &TaskService{
-		p:                  p,
-		peerToTaskResultC:  make(map[peer.ID]chan *pb.TaskResponse),
-		newTaskownerC:      make(chan peer.ID),
-		pendingAckTasks:    make(map[string]*pb.TaskRequest),
-		taskToPerformerMap: make(map[string]peer.ID),
+		p:                        p,
+		ownerToTaskResponseChan:  make(map[peer.ID]chan *pb.TaskResponse),
+		cNewTaskOwner:            make(chan peer.ID),
+		ownerToTaskRequestMap:    make(map[peer.ID]*pb.TaskRequest),
+		pendingAckTaskIDToReqMap: make(map[string]*pb.TaskRequest),
+		taskToPerformerMap:       make(map[string]peer.ID),
 	}
 	ts.p.SetStreamHandler(taskRequestProtocolID, ts.handleTaskRequest)
 	ts.p.SetStreamHandler(taskResponseProtocolID, ts.handleTaskResponse)
@@ -69,28 +71,43 @@ func NewTaskService(ctx context.Context, p TaskOwnerPerformer) *TaskService {
 func (ts *TaskService) loop(ctx context.Context) {
 	for {
 		select {
-		case newPeer := <-ts.newTaskownerC:
-			go ts.peerLoop(ctx, newPeer)
+		case owner := <-ts.cNewTaskOwner:
+			// execute task
+			go func() {
+				taskReq := ts.ownerToTaskRequestMap[owner]
+				resp, err := ts.p.HandleTaskRequest(ctx, taskReq)
+				if err != nil {
+					resp = &pb.TaskResponse{
+						Status:      pb.TaskResponse_FAILED,
+						TaskId:      taskReq.Task.TaskId,
+						Output:      []byte(err.Error()),
+						PerformerId: ts.p.ID().Pretty(),
+					}
+				}
+				ts.ownerToTaskResponseChan[owner] <- resp
+			}()
+			// wait for response
+			go ts.taskResponseWaitLoop(ctx, owner)
 
 		case <-ctx.Done():
 			log.Info("Exiting task service background loop...")
-			break
+			return
 		}
 	}
 }
 
-func (ts *TaskService) peerLoop(ctx context.Context, peerID peer.ID) {
+func (ts *TaskService) taskResponseWaitLoop(ctx context.Context, owner peer.ID) {
 	for {
 		select {
-		case resp := <-ts.peerToTaskResultC[peerID]:
-			if err := ts.sendTaskResponse(ctx, peerID, resp); err != nil {
-				log.WithField("to", peerID).Errorf("Failed to send task response - Error: %s", err.Error())
+		case resp := <-ts.ownerToTaskResponseChan[owner]:
+			if err := ts.sendTaskResponse(ctx, owner, resp); err != nil {
+				log.WithField("to", owner).Errorf("Failed to send task response - Error: %s", err.Error())
 			}
-			close(ts.peerToTaskResultC[peerID])
+			close(ts.ownerToTaskResponseChan[owner])
 			return
 		case <-ctx.Done():
-			log.Infof("Exiting background loop for peer %s", peerID)
-			break
+			log.Infof("Exiting background loop for peer %s", owner)
+			return
 		}
 	}
 }
@@ -189,7 +206,7 @@ func (ts *TaskService) handleTaskRequest(s network.Stream) {
 		"task": taskReq.Task.TaskId,
 	}).Infof("Accepted task. Pending ACK")
 
-	ts.pendingAckTasks[taskReq.Task.TaskId] = taskReq
+	ts.pendingAckTaskIDToReqMap[taskReq.Task.TaskId] = taskReq
 	s.Close()
 }
 
@@ -214,34 +231,25 @@ func (ts *TaskService) handleTaskAcceptACK(s network.Stream) {
 
 	if chosen == false {
 		log.WithField("task", taskID).Info("Received ACK. This peer is not chosen as the task performer")
-		delete(ts.pendingAckTasks, taskID)
+		delete(ts.pendingAckTaskIDToReqMap, taskID)
 		return
 	}
 
 	log.WithField("task", taskID).Infof("Received ACK. This peer is chosen as the task performer")
 
-	taskReq := ts.pendingAckTasks[taskID]
+	taskReq := ts.pendingAckTaskIDToReqMap[taskID]
 	taskOwnerID, err := peer.Decode(taskReq.Task.OwnerId)
 	if err != nil {
 		log.WithField("ownerId", taskReq.Task.OwnerId).Errorf("Failed to decode task owner id")
 	}
-	if _, ok := ts.peerToTaskResultC[taskOwnerID]; !ok {
-		ts.peerToTaskResultC[taskOwnerID] = make(chan *pb.TaskResponse, 1)
-		ts.newTaskownerC <- taskOwnerID
-	}
 
-	go func() {
-		resp, err := ts.p.HandleTaskRequest(taskReq)
-		if err != nil {
-			resp = &pb.TaskResponse{
-				Status:      pb.TaskResponse_FAILED,
-				TaskId:      taskReq.Task.TaskId,
-				Output:      []byte(err.Error()),
-				PerformerId: ts.p.ID().Pretty(),
-			}
-		}
-		ts.peerToTaskResultC[taskOwnerID] <- resp
-	}()
+	if _, ok := ts.ownerToTaskRequestMap[taskOwnerID]; !ok {
+		ts.ownerToTaskRequestMap[taskOwnerID] = taskReq
+	}
+	if _, ok := ts.ownerToTaskResponseChan[taskOwnerID]; !ok {
+		ts.ownerToTaskResponseChan[taskOwnerID] = make(chan *pb.TaskResponse, 1)
+	}
+	ts.cNewTaskOwner <- taskOwnerID
 }
 
 // TODO: implement this more properly

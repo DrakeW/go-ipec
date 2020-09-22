@@ -6,10 +6,9 @@ package protocols.ipec;
 
 message Task {
   string taskId = 1;
-  bytes function = 2;
-  bytes input = 3;
-  string description = 4;
-  string ownerId = 5;
+  string cid = 2;
+  string description = 3;
+  string ownerId = 4;
   int64 createdAt = 15;
 }
 
