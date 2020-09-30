@@ -16,7 +16,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+func setupLogger() {
+	customFormatter := new(log.TextFormatter)
+	customFormatter.FullTimestamp = true
+	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
+	log.SetFormatter(customFormatter)
+}
+
 func main() {
+	setupLogger()
+
 	peers := flag.String("peers", "", "Peers to connect to")
 	port := flag.Int("port", 0, "port to listen to")
 	funcFile := flag.String("func", "", "function file path")

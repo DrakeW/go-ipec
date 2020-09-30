@@ -56,6 +56,10 @@ func (s *IpfsService) Upload(ctx context.Context, path string) (ipfsPath.Resolve
 		return nil, err
 	}
 
+	log.WithField("ipfs_host", s.ipfsNode.PeerHost.ID().Pretty()).Infof(
+		"Start uploading file(s) at file system path %s", path,
+	)
+
 	p, err := s.Unixfs().Add(ctx, node)
 	if err != nil {
 		return nil, err
@@ -69,6 +73,10 @@ func (s *IpfsService) Upload(ctx context.Context, path string) (ipfsPath.Resolve
 }
 
 func (s *IpfsService) Download(ctx context.Context, p ipfsPath.Resolved, writePath string) error {
+	log.WithField("ipfs_host", s.ipfsNode.PeerHost.ID().Pretty()).Infof(
+		"Start downloading file(s) at IPFS path %s - file system path: %s", p.String(), writePath,
+	)
+
 	node, err := s.Unixfs().Get(ctx, p)
 	if err != nil {
 		return err
