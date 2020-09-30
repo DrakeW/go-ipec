@@ -39,6 +39,17 @@ func NewIpfsService(ctx context.Context, node *Node) *IpfsService {
 		panic(err)
 	}
 
+	go func() {
+		select {
+		case <-ctx.Done():
+			ipfsNode.Close()
+
+			log.WithField("service", "IPFS").Infof(
+				"Closed IPFS service - PeerID: %v", ipfsNode.PeerHost.ID().Pretty(),
+			)
+		}
+	}()
+
 	return &IpfsService{
 		node:     node,
 		CoreAPI:  api,
